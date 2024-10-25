@@ -5,6 +5,10 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "random.h"
+#include "pstat.h"
+
+int getpinfo(struct pstat*);
 
 uint64
 sys_exit(void)
@@ -99,4 +103,22 @@ sys_getfilenum(void)
 
   argint(0, &pid);
   return getfilenum(pid);
+}
+
+uint64
+sys_settickets(void)
+{
+  int n;
+  argint(0, &n);
+  
+  myproc()->tickets = n;
+  return 0;  // Returning 0 as uint64
+}
+
+uint64
+sys_getpinfo(void)
+{
+  struct pstat *p;
+  argaddr(0, (uint64*)&p);
+  return (getpinfo(p));
 }

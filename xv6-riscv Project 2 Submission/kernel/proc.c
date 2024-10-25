@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "random.h"
+#include "pstat.h"
 
 struct cpu cpus[NCPU];
 
@@ -51,6 +53,10 @@ procinit(void)
   
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+
+  // Initialize the random number generator
+  rand_init(12345); // You can replace 12345 with any seed of your choice
+
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->state = UNUSED;
@@ -111,6 +117,7 @@ allocproc(void)
 {
   struct proc *p;
 
+  // Loop through the process table looking for an UNUSED process.
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -124,6 +131,10 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+
+  // Initialize fields after allocating the process.
+  p->tickets = 1; // Default ticket count
+  p->ticks = 0;   // Initial tick count
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -288,6 +299,9 @@ fork(void)
     return -1;
   }
 
+  // Set child tickets to inherit from the parent.
+  np->tickets = p->tickets;
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -302,7 +316,7 @@ fork(void)
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 
-  // increment reference counts on open file descriptors.
+  // Increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
@@ -441,39 +455,59 @@ wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
-void
-scheduler(void)
-{
+void scheduler(void) {
   struct proc *p;
   struct cpu *c = mycpu();
-
   c->proc = 0;
+
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting.
+    // Enable interrupts to prevent deadlock
     intr_on();
 
+    int total_tickets = 0;
     int found = 0;
+
+    // Step 1: Calculate the total number of tickets across all RUNNABLE processes
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        total_tickets += p->tickets;  // Sum tickets for RUNNABLE processes
       }
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+
+    if (total_tickets > 0) {
+      // Step 2: Generate a random lottery number between 0 and total_tickets - 1
+      int winning_ticket = scaled_random(0, total_tickets - 1); // Use scaled_random function
+
+      int current_ticket_sum = 0;
+
+      // Step 3: Select the process whose ticket range includes the winning ticket
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          current_ticket_sum += p->tickets;
+          if(current_ticket_sum > winning_ticket) {
+            // We found the winning process
+            p->state = RUNNING;
+            c->proc = p;
+            found = 1;
+
+            p->ticks++;
+            // Context switch to the chosen process
+            swtch(&c->context, &p->context);
+            // Process is done running for now, reset CPU's process
+            c->proc = 0;
+            release(&p->lock);
+            break;
+          }
+        }
+        release(&p->lock);
+      }
+    }
+
+    // Step 4: If no process was found, halt the CPU until the next interrupt
+    if(!found) {
       intr_on();
       asm volatile("wfi");
     }
@@ -712,4 +746,16 @@ getfilenum(int pid)
       }
   }
   return -1;  // Return -1 if no files were found
+}
+
+int
+getpinfo(struct pstat *p){
+struct pstat pinfo;
+  for (int i = 0; i < NPROC; i++) {
+    pinfo.inuse[i] = (proc[i].state != UNUSED);
+    pinfo.tickets[i] = proc[i].tickets;
+    pinfo.pid[i] = proc[i].pid;
+    pinfo.ticks[i] = proc[i].ticks;
+  }
+  return either_copyout(1, (uint64) p, &pinfo, sizeof(struct pstat));;  // Returning copyout as uint64
 }
