@@ -35,3 +35,18 @@ random.c (added file) added random number generator that was provided.
 
 random.h (added file) creates uses for scaled_random() and rand_init().
 
+FOR PROJECT 5:
+Here's the commands to help run the code for all the parts:
+PART 1:
+gcc -pthread -o dining_philosophers dining_philosophers.c (For compiler)
+./dining_philosophers [Number of Philosophers] [Algorithm #]
+
+PART 2:
+gcc -pthread -o barbershop barbershop_problem.c
+./barbershop <# of barbers>
+
+PART 3:
+gcc -pthread -o barbershop3 barbershop_part_3.c
+./barbershop3 <# of barbers>
+
+These are just some examples of how to run the code for each specific Part.
